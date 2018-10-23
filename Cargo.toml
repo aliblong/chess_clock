@@ -1,0 +1,8 @@
+[package]
+name = "chess_clock"
+version = "0.1.0"
+authors = ["Aaron Liblong <liblonga@hotmail.com>"]
+
+[dependencies]
+stream-cancel = "*"
+tokio = "*"
