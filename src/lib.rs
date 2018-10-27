@@ -1,3 +1,4 @@
+extern crate futures;
 extern crate stream_cancel;
 extern crate tokio;
 

@@ -6,3 +6,4 @@ authors = ["Aaron Liblong <liblonga@hotmail.com>"]
 [dependencies]
 stream-cancel = "*"
 tokio = "*"
+futures = "*"
