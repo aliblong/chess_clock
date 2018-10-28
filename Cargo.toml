@@ -7,3 +7,4 @@ authors = ["Aaron Liblong <liblonga@hotmail.com>"]
 stream-cancel = "*"
 tokio = "*"
 futures = "*"
+tokio-current-thread = "*"

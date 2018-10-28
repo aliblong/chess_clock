@@ -1,12 +1,18 @@
 use futures::future::{self, ok, err, Either, FutureResult};
 use futures::prelude::*;
 use std::iter::Cycle;
-use futures::sync::mpsc::{Receiver, Sender};
+use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use std::thread;
 use std::time::{Duration, Instant};
 use tokio;
+use tokio_current_thread::block_on_all;
 use tokio::prelude::*;
 use tokio::timer::Delay;
+
+enum Action {
+    Next,
+    Expire,
+}
 
 /// There's probably a design involving a cycle iterator and
 /// `[rental](https://crates.io/crates/rental)`, but that seems like overengineering at this point
@@ -15,9 +21,9 @@ pub struct ChessClock {
     n_players: usize,
     active: usize,
     time_per_turn: Duration,
-    new_duration_tx: Sender<Duration>,
-    timeout_tx: Sender<()>,
-    next_rx: Receiver<()>,
+    new_duration_tx: UnboundedSender<Duration>,
+    expire_tx: UnboundedSender<()>,
+    next_rx: Option<UnboundedReceiver<()>>,
     time_last_triggered: Option<Instant>,
     //clock: Option<Delay>,
 }
@@ -33,9 +39,9 @@ impl ChessClock {
         n_players: usize,
         base_time: BaseTime,
         time_per_turn: TimePerTurn,
-        new_duration_tx: Sender<Duration>,
-        timeout_tx: Sender<()>,
-        next_rx: Receiver<()>,
+        new_duration_tx: UnboundedSender<Duration>,
+        expire_tx: UnboundedSender<()>,
+        next_rx: UnboundedReceiver<()>,
     ) -> ChessClock {
         ChessClock {
             remaining: vec![base_time.0 + time_per_turn.0; n_players],
@@ -43,20 +49,13 @@ impl ChessClock {
             active: 0,
             time_per_turn: time_per_turn.0,
             new_duration_tx: new_duration_tx,
-            timeout_tx: timeout_tx,
-            next_rx: next_rx,
+            expire_tx: expire_tx,
+            next_rx: Some(next_rx),
             time_last_triggered: None,
         }
     }
 
-    pub fn start() {}
-
-    fn recv_next(self) -> FutureResult<(), ()> {
-        self.next_rx.wait();
-        ok(())
-    }
-
-    fn launch_timer(&mut self, duration: Duration) {
+    fn launch_timer(&mut self, duration: Duration) -> Result<Action, ()> {
         let now = Instant::now();
         let expiry_time = now + duration;
         self.time_last_triggered = Some(now);
@@ -66,52 +65,71 @@ impl ChessClock {
                 .into_stream();
         //let future_recv_next = self.recv_next();
         //let future_recv_next = self.next_rx;
-        let next_or_expire = StreamNext::new(self.next_rx, future_expire)
+        let next_or_expire = StreamNext::new(self.next_rx.take().unwrap(), future_expire)
             .then(|res| {
                 match res {
-                    Ok(Either::A(_)) => {
-                        self.expire();
-                        ok(())
+                    Ok(Some((Either::A(_), rx, timer))) => {
+                        self.next_rx = Some(rx);
+                        drop(timer);
+                        ok(Action::Next)
                     },
-                    Ok(Either::B(_)) => {
-                        self.next();
-                        ok(())
+                    Ok(Some((Either::B(_), rx, _))) => {
+                        self.next_rx = Some(rx);
+                        ok(Action::Expire)
                     },
                     _ => {
-                        self.error();
-                        ok(())
+                        err(())
                     }
                 }
             });
-        tokio::run(next_or_expire);
+        block_on_all(next_or_expire)
     }
 
-    fn stop_timer(&mut self) {}
-    fn expire(&mut self) {}
+    pub fn start(&mut self) -> impl Future<Item = (), Error = ()> {
+        let start_duration = self.remaining[0];
+        self.process(start_duration);
+        ok(())
+    }
+
+    fn process(&mut self, duration: Duration) {
+        match self.launch_timer(duration) {
+            Ok(Action::Next) => self.next(),
+            Ok(Action::Expire) => self.expire(),
+            Err(()) => self.error(),
+        }
+    }
+
+    fn expire(&mut self) {
+        self.expire_tx.clone().send(());
+    }
     fn error(&mut self) {}
 
     pub fn next(&mut self) {
-        let active_player_remaining = self.remaining[self.active];
-        let new_remaining = active_player_remaining + self.time_per_turn
-            - self.time_last_triggered.unwrap().elapsed();
-        active_player_remaining = new_remaining;
-        self.new_duration_tx.send(new_remaining);
+        {
+            let active_player_remaining = &mut self.remaining[self.active];
+            let new_remaining = *active_player_remaining + self.time_per_turn
+                - self.time_last_triggered.unwrap().elapsed();
+            *active_player_remaining = new_remaining;
+            // This clone is needed because of how UnboundedSender is defined, I think
+            self.new_duration_tx.clone().send(new_remaining);
+        }
 
         if self.active == self.n_players - 1 {
             self.active = 0;
         } else {
             self.active += 1;
         }
-        active_player_remaining = self.remaining[self.active];
-        self.launch_timer(active_player_remaining);
+        let active_player_remaining = self.remaining[self.active];
+        self.process(active_player_remaining);
     }
 }
 
+/// https://github.com/rust-lang-nursery/futures-rs/issues/315#issuecomment-325061072
 /// Helper future to wait for the first item on one of two streams, returning
 /// the item and the two streams when done.
 struct StreamNext<S1, S2> {
-    left: S1,
-    right: S2,
+    left: Option<S1>,
+    right: Option<S2>,
 }
 
 impl<S1, S2> StreamNext<S1, S2>
@@ -121,8 +139,8 @@ where
 {
     fn new(s1: S1, s2: S2) -> StreamNext<S1, S2> {
         StreamNext {
-            left: s1,
-            right: s2,
+            left: Some(s1),
+            right: Some(s2),
         }
     }
 }
@@ -132,21 +150,29 @@ where
     S1: Stream,
     S2: Stream<Error = S1::Error>,
 {
-    type Item = Either<S1::Item, S2::Item>;
+    type Item = Option<(Either<S1::Item, S2::Item>, S1, S2)>;
     type Error = S1::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let item = {
-            match self.left.poll()? {
-                Async::Ready(item) => Either::A(item.unwrap()),
+            let left = self.left.as_mut().unwrap();
+            let right = self.right.as_mut().unwrap();
+            match left.poll()? {
+                Async::Ready(None) => return Ok(Async::Ready(None)),
+                Async::Ready(Some(item)) => Either::A(item),
                 Async::NotReady => {
-                    match self.right.poll()? {
-                        Async::Ready(item) => Either::B(item.unwrap()),
+                    match right.poll()? {
+                        Async::Ready(None) => return Ok(Async::Ready(None)),
+                        Async::Ready(Some(item)) => Either::B(item),
                         Async::NotReady => return Ok(Async::NotReady),
                     }
                 }
             }
         };
-        Ok(Async::Ready(item))
+        Ok(Async::Ready(Some((
+            item,
+            self.left.take().unwrap(),
+            self.right.take().unwrap(),
+        ))))
     }
 }
