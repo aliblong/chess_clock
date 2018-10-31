@@ -19,17 +19,18 @@ mod tests {
         use tokio::timer::Delay;
         use futures::future::{self, ok, err, Either, FutureResult};
         use tokio_current_thread;
+        use std::sync::{Arc, Mutex};
 
-        let mut chess_clock = ChessClock::new(
+        let mut chess_clock = Arc::new(Mutex::new(ChessClock::new(
             2,
-            BaseTime(Duration::new(5, 0)),
-            TimePerTurn(Duration::new(5, 0)),
-        );
+            BaseTime(Duration::new(2, 0)),
+            TimePerTurn(Duration::new(2, 0)),
+        )));
 
-        let when = Instant::now() + Duration::from_millis(1000);
+        let when = Instant::now() + Duration::from_millis(2000);
         let task = Delay::new(when)
             .map_err(|_| ());
-        let clocked_task = chess_clock.bind(task)
+        let clocked_task = ChessClock::bind(chess_clock, task)
             .then(|res| {
                 match res {
                     Ok(Either::A(_)) => {

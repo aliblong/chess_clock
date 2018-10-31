@@ -8,6 +8,7 @@ use tokio;
 use tokio_current_thread::block_on_all;
 use tokio::prelude::*;
 use tokio::timer::Delay;
+use std::sync::{Arc, Mutex};
 
 enum Action {
     Next,
@@ -24,8 +25,8 @@ pub struct ChessClock {
     time_last_triggered: Option<Instant>,
 }
 
-pub struct ClockedFuture<'a, F> {
-    clock: &'a mut ChessClock,
+pub struct ClockedFuture<F> {
+    clock: Arc<Mutex<ChessClock>>,
     expire: Box<Future<Item=(), Error=()> + Send>,
     future: F,
 }
@@ -53,23 +54,27 @@ impl ChessClock {
     }
 
     // Not sure if it's possible to implement this as a method taking &mut self
-    pub fn bind<F>(&mut self, f: F) -> ClockedFuture<F::Future>
+    pub fn bind<F>(safe_clock: Arc<Mutex<ChessClock>>, f: F) -> ClockedFuture<F::Future>
     where F: IntoFuture<Error = ()> {
-        let duration = self.remaining[self.active];
         let now = Instant::now();
-        let expiry_time = now + duration;
-        self.time_last_triggered = Some(now);
+        let mut expiry_time = now;
+        {
+            let clock = &mut *safe_clock.lock().unwrap();
+            let duration = clock.remaining[clock.active];
+            clock.time_last_triggered = Some(now);
+            expiry_time += duration;
+        }
         let expire = Box::new(Delay::new(expiry_time)
                 .map_err(|_| ()));
         ClockedFuture {
-            clock: self,
+            clock: safe_clock,
             expire: expire,
             future: f.into_future(),
         }
     }
 }
 
-impl<'a, F> Future for ClockedFuture<'a, F>
+impl<F> Future for ClockedFuture<F>
 where F: Future<Error = ()> {
     type Item = Either<F::Item, ()>;
     type Error = ();
@@ -78,7 +83,7 @@ where F: Future<Error = ()> {
         let item = {
             match self.future.poll()? {
                 Async::Ready(item) => {
-                    let clock = &mut self.clock;
+                    let mut clock = &mut *self.clock.lock().unwrap();
                     let active_player_remaining = &mut clock.remaining[clock.active];
                     let new_remaining = *active_player_remaining + clock.time_per_turn
                         - clock.time_last_triggered.unwrap().elapsed();
