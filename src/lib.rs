@@ -27,7 +27,7 @@
 //!       TimePerTurn(Duration::new(2, 0)),
 //!   );
 //!
-//!   let when = Instant::now() + Duration::from_millis(2000);
+//!   let when = Instant::now() + Duration::from_secs(2);
 //!   let task = Delay::new(when)
 //!       .map_err(|_| ());
 //!   let clocked_task = clock.bind(task)
@@ -52,51 +52,66 @@
 //! Output: `Task succeeded`, since the example task has duration less than the first player's base
 //! time + time-per-turn
 
+#![feature(duration_as_u128)]
+
 extern crate futures;
 extern crate tokio;
 
 mod chess_clock;
-pub use chess_clock::{ChessClock, ClockedFuture, BaseTime, TimePerTurn};
+pub use chess_clock::{BaseTime, ChessClock, ClockedFuture, TimePerTurn};
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn it_works() {
-        use super::{ChessClock, BaseTime, TimePerTurn};
+        use super::{BaseTime, ChessClock, TimePerTurn};
 
         use std::thread::sleep;
         use std::time::{Duration, Instant};
 
-        use futures::{prelude::*, future::{self, ok, err, Either, FutureResult}};
+        use futures::{
+            future::{self, err, ok, Either, FutureResult},
+            prelude::*,
+        };
         use tokio;
         use tokio::timer::Delay;
 
-        let mut clock = ChessClock::new(
-            2,
-            BaseTime(Duration::new(2, 0)),
-            TimePerTurn(Duration::new(2, 0)),
+        let bt = 4;
+        let tpt = 1;
+        let n_players = 2;
+        println!("Time control (seconds): {};{}", bt, tpt);
+        println!("Players: {}", n_players);
+        let mut clock_master = ChessClock::new(
+            n_players,
+            BaseTime(Duration::new(4, 0)),
+            TimePerTurn(Duration::new(1, 0)),
         );
 
-        let when = Instant::now() + Duration::from_millis(2000);
-        let task = Delay::new(when)
-            .map_err(|_| ());
-        let clocked_task = clock.bind(task)
-            .then(|res| {
-                match res {
-                    Ok(Some(_)) => {
-                        println!("Task succeeded");
-                        ok(())
-                    },
-                    Ok(None) => {
-                        println!("Task timed out");
-                        ok(())
-                    },
-                    _ => {
-                        err(())
-                    }
-                }
-            }
+        for i in 0..10 {
+            let clock = clock_master.clone();
+            let turn_length = 2;
+            let player_num = i % n_players + 1;
+            println!("---------------------------------------");
+            println!(
+                "Player {} time remaining: {}",
+                player_num,
+                clock.active_player_time_remaining().as_millis()
             );
-        tokio::run(clocked_task);
+            println!("Player {} turn length: {}", player_num, turn_length * 1000);
+            let when = Instant::now() + Duration::from_secs(turn_length);
+            let task = Delay::new(when).map_err(|_| ());
+            let clocked_task = clock.bind(task).then(|res| match res {
+                Ok(Some(_)) => {
+                    println!("Task succeeded");
+                    ok(())
+                }
+                Ok(None) => {
+                    println!("Task timed out");
+                    ok(())
+                }
+                _ => err(()),
+            });
+            tokio::run(clocked_task);
+        }
     }
 }
