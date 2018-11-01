@@ -1,13 +1,5 @@
-//! `ChessClock` is ARCed and mutexed so that it works nicely with the borrow checker, but by
-//! nature of its design, which is sequential passing of turns, it shouldn't be used simultaneously
-//! by two threads.
-//!
-//! It tracks the time of each player, a single global time-per-turn, the active player index, and
-//! the time the last turn was passed, so it can calculate the time to subtract from the next
-//! active player's clock.
-
 use futures::prelude::*;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use tokio::timer::Delay;
@@ -57,12 +49,12 @@ impl ClockCore {
 }
 
 #[derive(Clone)]
-pub struct ChessClock(Arc<Mutex<ClockCore>>);
+pub struct ChessClock(Arc<RwLock<ClockCore>>);
 
 impl ChessClock {
     /// Do not try to make a chess clock with 0 players, or it will panic somewhere down the line.
     pub fn new(n_players: usize, base_time: BaseTime, time_per_turn: TimePerTurn) -> ChessClock {
-        ChessClock(Arc::new(Mutex::new(ClockCore::new(
+        ChessClock(Arc::new(RwLock::new(ClockCore::new(
             n_players,
             base_time,
             time_per_turn,
@@ -78,7 +70,7 @@ impl ChessClock {
         let now = Instant::now();
         let mut expiry_time = now;
         {
-            let clock = &mut *self.0.lock().unwrap();
+            let clock = &mut *self.0.write().unwrap();
             let duration = clock.remaining[clock.active];
             clock.time_last_triggered = Some(now);
             expiry_time += duration;
@@ -91,16 +83,19 @@ impl ChessClock {
         }
     }
 
+    /// Returns the time remaining for the active player.
     pub fn active_player_time_remaining(&self) -> Duration {
-        let clock = &*self.0.lock().unwrap();
+        let clock = &*self.0.read().unwrap();
         clock.remaining[clock.active]
     }
+    /// Returns the times remaining for all players.
     pub fn times_remaining(&self) -> Vec<Duration> {
-        let clock = &*self.0.lock().unwrap();
+        let clock = &*self.0.read().unwrap();
         clock.remaining.clone()
     }
+    /// Returns the index of the active player.
     pub fn active_player(&self) -> usize {
-        let clock = &*self.0.lock().unwrap();
+        let clock = &*self.0.read().unwrap();
         clock.active
     }
 }
@@ -136,7 +131,7 @@ where
                 },
             }
         };
-        let clock = &mut *self.clock.0.lock().unwrap();
+        let clock = &mut *self.clock.0.write().unwrap();
         clock.next();
         Ok(Async::Ready(item))
     }

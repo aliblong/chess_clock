@@ -51,6 +51,16 @@
 //! ```
 //! Output: `Task succeeded`, since the example task has duration less than the first player's base
 //! time + time-per-turn
+//!
+//! # Implementation details
+//!
+//! `ChessClock` is [ARCed][std::sync::Arc] and (rw-mutexed)[std::sync::RwLock] so that it works
+//! nicely with the borrow checker, but by nature of its design, which is sequential passing of
+//! turns, it shouldn't be used simultaneously by two threads.
+//!
+//! It tracks the time of each player, a single global time-per-turn, the active player index, and
+//! the time the last turn was passed, so it can calculate the time to subtract from the next
+//! active player's clock.
 
 #![feature(duration_as_u128)]
 
@@ -100,13 +110,13 @@ mod tests {
             println!("Player {} turn length: {}", player_num, turn_length * 1000);
             let when = Instant::now() + Duration::from_secs(turn_length);
             let task = Delay::new(when).map_err(|_| ());
-            let clocked_task = clock.bind(task).then(|res| match res {
+            let clocked_task = clock.bind(task).then(move |res| match res {
                 Ok(Some(_)) => {
-                    println!("Task succeeded");
+                    println!("Player {} successfully took their turn.", player_num);
                     ok(())
                 }
                 Ok(None) => {
-                    println!("Task timed out");
+                    println!("Player {} timed out", player_num);
                     ok(())
                 }
                 _ => err(()),
