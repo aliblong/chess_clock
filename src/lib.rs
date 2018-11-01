@@ -1,8 +1,10 @@
 //! A futures-based chess clock which provides timeout-like functionality for other futures.
-//! In addition to the typical configurable base time and time per turn, `ChessClock` supports [1,
+//!
+//! In addition to the typical configurable base time and time-per-turn, `ChessClock` supports [1,
 //! usize::max] players, which can be useful in time-controlled, turn-based games that support more
 //! than two players, such as [Hanabi](https://hanabi.live).
-//! Per FIDE rules, time per turn is added on the very first move
+//!
+//! Per FIDE rules, time-per-turn is added on the very first move.
 //!
 //! # Example usage:
 //! ```
@@ -48,13 +50,13 @@
 //!   tokio::run(clocked_task);
 //! ```
 //! Output: `Task succeeded`, since the example task has duration less than the first player's base
-//! time + time per turn
+//! time + time-per-turn
 
 extern crate futures;
 extern crate tokio;
 
 mod chess_clock;
-pub use chess_clock::{ChessClock, BaseTime, TimePerTurn};
+pub use chess_clock::{ChessClock, ClockedFuture, BaseTime, TimePerTurn};
 
 #[cfg(test)]
 mod tests {
