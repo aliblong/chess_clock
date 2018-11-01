@@ -4,7 +4,5 @@ version = "0.1.0"
 authors = ["Aaron Liblong <liblonga@hotmail.com>"]
 
 [dependencies]
-stream-cancel = "*"
-tokio = "*"
-futures = "*"
-tokio-current-thread = "*"
+tokio = "^0.1.11"
+futures = "^0.1.20"
