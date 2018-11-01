@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Aaron Liblong <liblonga@hotmail.com>"]
 description = "A futures-based chess clock which provides timeout-like functionality for other futures."
 license = "GPL-3.0-or-later"
+repository = "https://github.com/aliblong/chess_clock"
 
 [dependencies]
 tokio = "^0.1.11"
