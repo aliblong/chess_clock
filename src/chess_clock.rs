@@ -12,9 +12,7 @@ pub struct TimePerTurn(pub Duration);
 struct ClockCore {
     remaining: Vec<Duration>,
     n_players: usize,
-    // There's probably a design involving a cycle iterator and
-    // `[rental](https://crates.io/crates/rental)` rather than just keeping track of the active player
-    // index, but that seems like overengineering at this point.
+    // Index to the currently active player
     active: usize,
     time_per_turn: Duration,
     time_last_triggered: Option<Instant>,
@@ -30,7 +28,7 @@ impl ClockCore {
             time_last_triggered: None,
         }
     }
-    fn next(&mut self) {
+    fn pass(&mut self, optional_player_idx: Option<usize>) {
         let active_player_remaining = &mut self.remaining[self.active];
         let new_remaining =
             active_player_remaining.checked_sub(self.time_last_triggered.unwrap().elapsed());
@@ -40,10 +38,11 @@ impl ClockCore {
         };
         *active_player_remaining += self.time_per_turn;
 
-        if self.active == self.n_players - 1 {
-            self.active = 0;
-        } else {
-            self.active += 1;
+        match optional_player_idx {
+            Some(i) => self.active = i,
+            None => {
+                self.active = if self.active == self.n_players - 1 { 0 } else { self.active + 1 };
+            },
         }
     }
 }
@@ -77,7 +76,6 @@ impl ChessClock {
         }
         let expire = Box::new(Delay::new(expiry_time).map_err(|_| ()));
         ClockedFuture {
-            clock: self,
             expire: expire,
             future: f.into_future(),
         }
@@ -98,6 +96,10 @@ impl ChessClock {
         let clock = &*self.0.read().unwrap();
         clock.active
     }
+    pub fn pass(self, optional_player_idx: Option<usize>) {
+        let clock = &mut *self.0.write().unwrap();
+        clock.pass(optional_player_idx);
+    }
 }
 
 /// Represents the combination of a future `f` with a chess clock through
@@ -106,7 +108,6 @@ impl ChessClock {
 /// A `ClockedFuture` will return either `Some(item)`, where `item` is the return value of `f`,
 /// or `None`, if the clock expires.
 pub struct ClockedFuture<F> {
-    clock: ChessClock,
     expire: Box<Future<Item = (), Error = ()> + Send>,
     future: F,
 }
@@ -131,8 +132,6 @@ where
                 },
             }
         };
-        let clock = &mut *self.clock.0.write().unwrap();
-        clock.next();
         Ok(Async::Ready(item))
     }
 }

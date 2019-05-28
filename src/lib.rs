@@ -100,7 +100,7 @@ mod tests {
         for i in 0..10 {
             let clock = clock_master.clone();
             let turn_length = 2;
-            let player_num = i % n_players + 1;
+            let player_num = clock.active_player();
             println!("---------------------------------------");
             println!(
                 "Player {} time remaining: {}",
@@ -122,6 +122,8 @@ mod tests {
                 _ => err(()),
             });
             tokio::run(clocked_task);
+            // The player passes the turn to... herself?
+            clock_master.clone().pass(player_num.into());
         }
     }
 }
